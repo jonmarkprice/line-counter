@@ -10,10 +10,6 @@ const showError = R.curry(function(path, val, err) {
   return F.of(val);
 });
 
-const sum = R.curry(function(getter, items) {
-  return items.reduce((sum, item) => sum + getter(item), 0);
-});
-
 function readDir(dir) {
   return F.node(done => fs.readdir(dir, done));
 }
@@ -55,7 +51,7 @@ function countLinesOfFiles(dir, files) {
   return F.parallel(32, files.map(filename => {
     const path = npath.join(dir, filename);
     return countLinesOfFile(path).chainRej(showError(path, 0));
-  })).map(sum(num => num)).map(sumOfLineCounts => {
+  })).map(R.sum).map(sumOfLineCounts => {
     return {
       fileCount: files.length,
       lineCount: sumOfLineCounts
@@ -69,13 +65,13 @@ function countLinesOfSubdirs(dir, subdirs) {
     return countLinesOfDir(path);
   })).map(counts => {
     return {
-      fileCount: sum(R.prop("fileCount"), counts),
-      lineCount: sum(R.prop("lineCount"), counts)
+      fileCount: R.sum(R.pluck('fileCount', counts)),
+      lineCount: R.sum(R.pluck('lineCount', counts))
     };
   });
 }
 
-function splitFilesAndDirs(dir, names) {
+const splitFilesAndDirs = R.curry(function (dir, names) { // curry it
   return F.parallel(32, names.map(name => {
     const path = npath.join(dir, name);
     return isDir(path).chainRej(showError(path, null));
@@ -86,21 +82,15 @@ function splitFilesAndDirs(dir, names) {
       subdirs: names.filter((name, idx) => flags[idx] === true)
     };
   });
-}
+});
 
 function countLinesOfDir(dir) {
-  return readDir(dir).chain(names => {
-    return splitFilesAndDirs(dir, names).chain(({files, subdirs}) => {
-      return countLinesOfFiles(dir, files).chain(filesInfo => {
-        return countLinesOfSubdirs(dir, subdirs).map(dirsInfo => {
-          return {
-            fileCount: filesInfo.fileCount + dirsInfo.fileCount,
-            lineCount: filesInfo.lineCount + dirsInfo.lineCount
-          };
-        });
-      });
-    });
-  }).map(info => {
+  return readDir(dir)
+  .chain(splitFilesAndDirs(dir))
+  .chain(({files, subdirs}) => F.of(R.mergeWith(R.add))
+    .ap(countLinesOfFiles(dir, files))
+    .ap(countLinesOfSubdirs(dir, subdirs))
+  ).map(info => {
     console.log(`${dir} = ${info.fileCount} files, ${info.lineCount} lines`);
     return info;
   }).chainRej(showError(dir, {fileCount: 0, lineCount: 0}));
